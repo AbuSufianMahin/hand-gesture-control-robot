@@ -1,3 +1,8 @@
+//all working but the wheels.
+
+
+#include <SoftwareSerial.h>
+
 // L298N Pin Mapping
 #define ENA 7
 #define ENB 13
@@ -6,62 +11,65 @@
 #define IN3 10
 #define IN4 8
 
-// ultrasonic sensor variables
+// Ultrasonic sensor
 #define TRIG 3
 #define ECHO 2
-
-#define STOP_DISTANCE 15
+#define STOP_DISTANCE 20
 
 // Buzzer
 #define BUZZER 4
 
-void setup() {
-  // pwm
-  pinMode(ENA, OUTPUT);
-  pinMode(ENB, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
+// ESP32 communication
+SoftwareSerial espSerial(5, 6);
 
-  // ultrasonic
-  pinMode(TRIG, OUTPUT);
-  pinMode(ECHO, INPUT);
+// State
+char currentCmd = 'S';
+char lastLoggedCmd = ' ';
+char lastMoveCmd = 'S';  // last non-stop command
+unsigned long lastCmdTime = 0;
+#define WIFI_TIMEOUT_MS 500
 
-  Serial.begin(9600);
+// Non-blocking buzzer
+unsigned long buzzerLastToggle = 0;
+bool buzzerState = false;
+int buzzerOnTime = 0;
+int buzzerOffTime = 0;
+bool buzzerActive = false;
 
-  // buzzer
-  pinMode(BUZZER, OUTPUT);
+void setBuzzerPattern(int onMs, int offMs) {
+  buzzerOnTime = onMs;
+  buzzerOffTime = offMs;
+  buzzerActive = true;
+  if (!buzzerState) {
+    digitalWrite(BUZZER, HIGH);
+    buzzerState = true;
+    buzzerLastToggle = millis();
+  }
 }
 
-void spinLeft() {
-  // Left wheels backward, Right wheels forward
-  digitalWrite(ENA, HIGH); 
-  digitalWrite(ENB, HIGH);
-
-  // left wheelss => backward
-  digitalWrite(IN1, LOW);  
-  digitalWrite(IN2, HIGH);
-  
-  // right wheels => forward
-  digitalWrite(IN3, HIGH); 
-  digitalWrite(IN4, LOW);
+void stopBuzzer() {
+  buzzerActive = false;
+  buzzerState = false;
+  digitalWrite(BUZZER, LOW);
 }
 
-void spinRight() {
-  // Left wheels forward, Right wheels backward
-  digitalWrite(ENA, HIGH); 
-  digitalWrite(ENB, HIGH);
-  
-  // left wheels => forward
-  digitalWrite(IN1, HIGH); 
-  digitalWrite(IN2, LOW); 
+void updateBuzzer() {
+  if (!buzzerActive) return;
+  unsigned long now = millis();
+  unsigned long elapsed = now - buzzerLastToggle;
 
-  // right wheels => backward
-  digitalWrite(IN3, LOW);  
-  digitalWrite(IN4, HIGH);
+  if (buzzerState && elapsed >= (unsigned long)buzzerOnTime) {
+    digitalWrite(BUZZER, LOW);
+    buzzerState = false;
+    buzzerLastToggle = now;
+  } else if (!buzzerState && elapsed >= (unsigned long)buzzerOffTime) {
+    digitalWrite(BUZZER, HIGH);
+    buzzerState = true;
+    buzzerLastToggle = now;
+  }
 }
 
+// ── Motion ────────────────────────────────────────────────────
 void forward() {
   digitalWrite(ENA, HIGH);
   digitalWrite(ENB, HIGH);
@@ -80,6 +88,24 @@ void backward() {
   digitalWrite(IN4, HIGH);
 }
 
+void spinLeft() {
+  digitalWrite(ENA, HIGH);
+  digitalWrite(ENB, HIGH);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+}
+
+void spinRight() {
+  digitalWrite(ENA, HIGH);
+  digitalWrite(ENB, HIGH);
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+}
+
 void stopAll() {
   digitalWrite(ENA, LOW);
   digitalWrite(ENB, LOW);
@@ -89,62 +115,115 @@ void stopAll() {
   digitalWrite(IN4, LOW);
 }
 
+// ── Ultrasonic ────────────────────────────────────────────────
 long getDistance() {
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
-
-  long duration = pulseIn(ECHO, HIGH);
+  long duration = pulseIn(ECHO, HIGH, 20000);  // 20ms timeout (~3.4m max)
+  if (duration == 0) return 999;               // no echo = clear path
   return duration * 0.034 / 2;
 }
 
-void beepBuzzer(bool obstaclePresent) {
-  static bool done = false;
+void setup() {
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(BUZZER, OUTPUT);
 
-  if (!obstaclePresent) {
-    done = false;  // reset when obstacle clears
-    digitalWrite(BUZZER, LOW);
-    return;
-  }
+  Serial.begin(9600);
+  espSerial.begin(9600);
 
-  if (done) return;
-
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(BUZZER, HIGH);
-    delay(150);
-    digitalWrite(BUZZER, LOW);
-    delay(100);
-  }
-
-  // Long pause
-  delay(300);
-
-  // Second set of 3 beeps
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(BUZZER, HIGH);
-    delay(150);
-    digitalWrite(BUZZER, LOW);
-    delay(100);
-  }
-  done = true;
+  stopAll();
+  Serial.println("=== Robot Ready ===");
 }
 
 void loop() {
-  long distance = getDistance();
-  Serial.print("Distance: ");
-  Serial.print(distance);
-  Serial.println(" cm");
+  unsigned long now = millis();
 
-  if (distance < STOP_DISTANCE) {
-    Serial.println("Obstacle detected! Stopping.");
-    stopAll();
-    beepBuzzer(true);
-  } else {
-    beepBuzzer(false);  // resets the flag and turns off buzzer
-    forward();
+  // ── Update non-blocking buzzer ──
+  updateBuzzer();
+
+  // ── Read command from ESP32 ──
+  if (espSerial.available() > 0) {
+    char cmd = (char)espSerial.read();
+    if (cmd == 'F' || cmd == 'B' || cmd == 'L' || cmd == 'R' || cmd == 'S') {
+      currentCmd = cmd;
+      lastCmdTime = now;
+    }
   }
 
-  delay(100);
+  // ── WiFi timeout ──
+  if (lastCmdTime != 0 && (now - lastCmdTime) > WIFI_TIMEOUT_MS) {
+    if (currentCmd != 'S') {
+      Serial.println("[WIFI] Connection lost! Stopping.");
+      currentCmd = 'S';
+      setBuzzerPattern(1000, 500);
+    }
+  }
+
+  // ── Ultrasonic ──
+  long distance = getDistance();
+
+
+  // Block forward if obstacle
+  if (currentCmd == 'F' && distance < STOP_DISTANCE) {
+    if (lastLoggedCmd != 'X') {
+      Serial.print("[OBSTACLE] Obstacle found! At Distance: ");
+      Serial.print(distance);
+      Serial.println(" cm. Stopping.");
+      lastLoggedCmd = 'X';
+    }
+    stopAll();
+    Serial.println("[DEBUG] stopAll() called");
+    Serial.print("[DEBUG] ENA pin state: ");
+    Serial.println(digitalRead(ENA));
+    Serial.print("[DEBUG] ENB pin state: ");
+    Serial.println(digitalRead(ENB));
+    setBuzzerPattern(150, 100);
+    return;
+  }
+
+  // ── Execute command ──
+  switch (currentCmd) {
+    case 'F':
+      forward();
+      if (currentCmd != lastLoggedCmd) Serial.println("[MOVE] Moving Forward");
+      stopBuzzer();
+      break;
+
+    case 'B':
+      backward();
+      if (currentCmd != lastLoggedCmd) Serial.println("[MOVE] Moving Backward");
+      setBuzzerPattern(200, 400);  // truck reversing beep
+      break;
+
+    case 'L':
+      spinLeft();
+      if (currentCmd != lastLoggedCmd) Serial.println("[MOVE] Turning Left");
+      stopBuzzer();
+      break;
+
+    case 'R':
+      spinRight();
+      if (currentCmd != lastLoggedCmd) Serial.println("[MOVE] Turning Right");
+      stopBuzzer();
+      break;
+
+    case 'S':
+    default:
+      stopAll();
+      if (currentCmd != lastLoggedCmd) Serial.println("[MOVE] Stopped");
+      stopBuzzer();
+      break;
+  }
+
+  lastLoggedCmd = currentCmd;
 }

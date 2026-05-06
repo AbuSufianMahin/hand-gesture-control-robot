@@ -2,20 +2,19 @@ import cv2
 import time
 import math
 import threading
-import requests
+import socket
 from hand_detector import HandDetector
 
-# ── ESP32 config ──────────────────────────────────────────────
-ESP32_IP   = "192.168.1.100"   # <-- replace with your ESP32's IP from Serial Monitor
-ESP32_PORT = 80
-CMD_URL    = f"http://{ESP32_IP}:{ESP32_PORT}/cmd"
-TIMEOUT    = 0.5               # seconds — don't block the camera loop
+ESP32_IP   = "192.168.137.143"
+UDP_PORT   = 4210
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 GESTURE_COMMANDS = {
-    "thumbs_up":    "forward",
-    "thumbs_down":  "backward",
-    "thumbs_left":  "left",
-    "thumbs_right": "right",
+    "thumbs_up":    "F",
+    "thumbs_down":  "B",
+    "thumbs_left":  "L",
+    "thumbs_right": "R",
 }
 
 GESTURE_LABELS = {
@@ -25,25 +24,23 @@ GESTURE_LABELS = {
     "thumbs_right": ("Right",    (255, 100, 200)),
 }
 
-DEBOUNCE_SECONDS   = 2.0
+DEBOUNCE_SECONDS   = 0.5
+REPEAT_INTERVAL    = 0.05
 FINGERTIP_IDS      = [4, 8, 12, 16, 20]
 MOVEMENT_THRESHOLD = 12
 
-# ── Non-blocking HTTP sender ──────────────────────────────────
 def send_command(action):
-    """Fire-and-forget HTTP request on a background thread."""
     def _send():
         try:
-            r = requests.get(CMD_URL, params={"action": action}, timeout=TIMEOUT)
-            print(f"[CMD] {action} -> {r.status_code} {r.text}")
-        except requests.exceptions.RequestException as e:
-            print(f"[CMD] {action} -> ERROR: {e}")
+            sock.sendto(action.encode(), (ESP32_IP, UDP_PORT))
+            print(f"[CMD] Sent: {action}")
+        except Exception as e:
+            print(f"[CMD] Error: {e}")
     threading.Thread(target=_send, daemon=True).start()
 
 def send_stop():
-    send_command("stop")
+    send_command("S")
 
-# ── Helpers ───────────────────────────────────────────────────
 def landmark_centroid(positions):
     if not positions:
         return None
@@ -61,7 +58,6 @@ def log_fingertips(gesture, positions):
             print(f"  LM {tip_id:2d}: x={x:4d}, y={y:4d}, z={z:.4f}")
     print()
 
-# ── Main ──────────────────────────────────────────────────────
 def main():
     capture  = cv2.VideoCapture(0)
     detector = HandDetector(max_hands=1, detection_conf=0.5, tracking_conf=0.3)
@@ -70,6 +66,7 @@ def main():
     last_centroid           = None
     logged_for_current_hold = False
     last_sent_gesture       = None
+    last_sent_time          = None
 
     while True:
         success, frame = capture.read()
@@ -78,7 +75,6 @@ def main():
 
         frame = cv2.flip(frame, 1)
 
-        # Block if more than 1 hand
         detector.find_hands(frame, draw=False)
         if detector.hand_count() > 1:
             cv2.putText(frame, "1 hand only", (10, 20),
@@ -88,6 +84,7 @@ def main():
                 last_sent_gesture = None
             stable_since  = None
             last_centroid = None
+            last_sent_time = None
             logged_for_current_hold = False
             cv2.imshow("Hand Detection", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -106,10 +103,12 @@ def main():
                 last_sent_gesture = None
             stable_since  = None
             last_centroid = None
+            last_sent_time = None
             logged_for_current_hold = False
         else:
             if last_centroid is None:
                 stable_since = now
+                last_sent_time = None
                 logged_for_current_hold = False
             else:
                 dist = math.hypot(centroid[0] - last_centroid[0],
@@ -119,21 +118,44 @@ def main():
                         send_stop()
                         last_sent_gesture = None
                     stable_since = now
+                    last_sent_time = None
                     logged_for_current_hold = False
 
             last_centroid = centroid
             held_duration = now - stable_since
 
-            if held_duration >= DEBOUNCE_SECONDS and not logged_for_current_hold:
-                log_fingertips(gesture, positions)
-                logged_for_current_hold = True
+            if held_duration >= DEBOUNCE_SECONDS:
+                if not logged_for_current_hold:
+                    log_fingertips(gesture, positions)
+                    logged_for_current_hold = True
 
-                if gesture and gesture != last_sent_gesture:
-                    send_command(GESTURE_COMMANDS[gesture])
-                    last_sent_gesture = gesture
-                elif gesture is None and last_sent_gesture is not None:
-                    send_stop()
-                    last_sent_gesture = None
+                    if gesture in GESTURE_COMMANDS:
+                        send_command(GESTURE_COMMANDS[gesture])
+                        last_sent_gesture = gesture
+                        last_sent_time = now
+                    else:
+                        # Unrecognized gesture → stop
+                        if last_sent_gesture is not None:
+                            send_stop()
+                            last_sent_gesture = None
+                else:
+                    if gesture in GESTURE_COMMANDS:
+                        if gesture != last_sent_gesture:
+                            log_fingertips(gesture, positions)
+                            send_command(GESTURE_COMMANDS[gesture])
+                            last_sent_gesture = gesture
+                            last_sent_time = now
+                        else:
+                            if now - last_sent_time >= REPEAT_INTERVAL:
+                                send_command(GESTURE_COMMANDS[gesture])
+                                last_sent_time = now
+                    else:
+                        # Unrecognized gesture → stop
+                        if last_sent_gesture is not None:
+                            send_stop()
+                            last_sent_gesture = None
+                        stable_since = now
+                        logged_for_current_hold = False
 
             # Progress bar
             progress = min(held_duration / DEBOUNCE_SECONDS, 1.0)
@@ -143,14 +165,17 @@ def main():
             cv2.putText(frame, f"{min(held_duration, DEBOUNCE_SECONDS):.1f}s",
                         (135, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1)
 
-        # Gesture label
-        if gesture:
+        # Gesture label — only show if recognized
+        if gesture and gesture in GESTURE_LABELS:
             label, color = GESTURE_LABELS[gesture]
             cv2.putText(frame, label, (10, 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        elif gesture:
+            cv2.putText(frame, "Unknown", (10, 22),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 100, 100), 2)
 
-        # Active robot command (bottom of frame)
-        if last_sent_gesture:
+        # Active robot command
+        if last_sent_gesture and last_sent_gesture in GESTURE_LABELS:
             _, color = GESTURE_LABELS[last_sent_gesture]
             cv2.putText(frame, f"ROBOT: {GESTURE_COMMANDS[last_sent_gesture].upper()}",
                         (10, frame.shape[0] - 10),
@@ -164,6 +189,7 @@ def main():
         cv2.imshow("Hand Detection", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             send_stop()
+            sock.close()
             break
 
     capture.release()
