@@ -73,25 +73,6 @@ class HandDetector:
         ndx = dx / hand_scale
         ndy = dy / hand_scale
 
-        # --- Thresholds (derived from logged data) ---
-        # Vertical threshold: thumb_tip.y vs avg_finger.y
-        #   thumbs_up:   ndy < -VERT_THRESH  (thumb clearly above fingers)
-        #   thumbs_down: ndy >  VERT_THRESH  (thumb clearly below fingers)
-        # Horizontal threshold: thumb_tip.x vs avg_finger.x
-        #   thumbs_left:  ndx < -HORIZ_THRESH (thumb clearly left of fingers)
-        #   thumbs_right: ndx >  HORIZ_THRESH (thumb clearly right of fingers)
-        #
-        # From data:
-        #   thumbs_up confirmed:  LM4.y~145-154, avg_finger.y~310-385 → dy ~ -160 to -230
-        #   thumbs_up misses:     LM4.y~155-230, avg_finger.y~350-470 → dy ~ -150 to -240 (same range!)
-        #   thumbs_down confirmed: LM4.y~450,    avg_finger.y~104-251 → dy ~ +200 to +350
-        #   thumbs_down misses:   LM4.y~373-429, avg_finger.y~138-297 → dy ~ +100 to +290
-        #   thumbs_left:  LM4.x~279-323, avg_finger.x~453-633        → dx ~ -150 to -310
-        #   thumbs_right: LM4.x~424-488, avg_finger.x~78-332         → dx ~ +100 to +350
-        #
-        # hand_scale (wrist→mid_mcp) is typically 80-150px at normal distances
-        # Using 0.6 normalized = ~60-90px raw, conservative enough to avoid false positives
-
         VERT_THRESH  = 0.6
         HORIZ_THRESH = 0.6
 

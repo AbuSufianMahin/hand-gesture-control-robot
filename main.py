@@ -52,11 +52,6 @@ def log_fingertips(gesture, positions):
     lm = {id: (x, y, z) for id, x, y, z in positions}
     label = gesture if gesture else "NO_GESTURE"
     print(f"\n[STABLE HAND: {label}]")
-    for tip_id in FINGERTIP_IDS:
-        if tip_id in lm:
-            x, y, z = lm[tip_id]
-            print(f"  LM {tip_id:2d}: x={x:4d}, y={y:4d}, z={z:.4f}")
-    print()
 
 def main():
     capture  = cv2.VideoCapture(0)
