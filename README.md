@@ -7,7 +7,7 @@ A 4-wheeled robot car remotely controlled via hand gestures, powered by an Ardui
 ## 🎥 Demo
 
 ### 🚗 Car Demo
-[![Car Demo](https://img.youtube.com/vi/n5GBLmJI8wY/0.jpg)](https://www.youtube.com/shorts/n5GBLmJI8wY)
+[![Car Demo](https://img.youtube.com/vi/zA0P0gngUo8/0.jpg)](https://www.youtube.com/shorts/zA0P0gngUo8)
 
 ### 🤚 Hand Gesture Demo
 https://github.com/user-attachments/assets/dc24d131-95c1-45b6-982f-e5e591bee00d
