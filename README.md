@@ -29,7 +29,7 @@ https://github.com/user-attachments/assets/dc24d131-95c1-45b6-982f-e5e591bee00d
 
 ## 🌐 Communication Architecture
 
-![Communication Architecture](assets/Communication-Architecture.png)
+![Communication Architecture](assets/communication-architecture-diagram.png)
 
 
 ## ⚡ Wiring / Connection Description
