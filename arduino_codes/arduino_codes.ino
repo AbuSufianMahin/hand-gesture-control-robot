@@ -1,6 +1,3 @@
-//all working but the wheels.
-
-
 #include <SoftwareSerial.h>
 
 // L298N Pin Mapping

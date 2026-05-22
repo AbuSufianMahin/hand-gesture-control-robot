@@ -1,8 +1,11 @@
+#include "config.h"
+
+
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-const char* ssid     = "NINJURO";
-const char* password = "omega365";
+const char* ssid     = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 IPAddress local_IP(192, 168, 137, 143);
 IPAddress gateway(192, 168, 137, 1);
